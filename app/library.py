@@ -5,6 +5,7 @@ extracts rich metadata from Steam manifests and store APIs, and generates librar
 """
 
 import os
+import re
 import json
 import urllib.request
 import urllib.error
@@ -17,6 +18,8 @@ from scripts.discover_exe import (
     discover_all_executables,
     extract_steam_manifest_info,
     is_valid_game_dir,
+    is_dependency_dir,
+    REDIST_TOOL_APP_IDS,
     find_goldberg_locations,
     find_save_data,
     find_redistributables,
@@ -157,32 +160,140 @@ def inspect_game_folder(game_dir: Path) -> Dict[str, Any]:
     }
 
 
-def scan_input_library() -> List[Dict[str, Any]]:
+def find_candidate_game_dirs(input_dir: Path) -> List[Path]:
     """
-    Scans INPUT_DIR. Filters out NAS metadata directories like @eaDir, #recycle,
-    and empty folders. Validates that candidate folders contain genuine game binaries
-    or Steam manifests.
+    Discovers candidate game directories inside input_dir.
+    Supports:
+    1. Steam library layout: /input/steamapps/common/<Game>
+    2. Common container layout: /input/common/<Game>
+    3. Direct subdirectories: /input/<Game>
+    4. Standalone root game: /input is itself a game
     """
-    if not INPUT_DIR.exists() or not INPUT_DIR.is_dir():
+    if not input_dir.exists() or not input_dir.is_dir():
         return []
 
-    # Check if INPUT_DIR itself is a single game directory
-    subdirs = [p for p in INPUT_DIR.iterdir() if p.is_dir()]
+    # 1. Check for steamapps/common structure
+    steam_common = input_dir / "steamapps" / "common"
+    if steam_common.exists() and steam_common.is_dir():
+        common_candidates = [d for d in steam_common.iterdir() if d.is_dir() and is_valid_game_dir(d)]
+        if common_candidates:
+            return common_candidates
+
+    # 2. Check for common/ container directly in input
+    direct_common = input_dir / "common"
+    if direct_common.exists() and direct_common.is_dir():
+        common_candidates = [d for d in direct_common.iterdir() if d.is_dir() and is_valid_game_dir(d)]
+        if common_candidates:
+            return common_candidates
+
+    # 3. Enumerate direct subdirectories
+    subdirs = [p for p in input_dir.iterdir() if p.is_dir()]
     valid_subdirs = [s for s in subdirs if is_valid_game_dir(s)]
 
-    top_exes = [f for f in INPUT_DIR.glob("*.exe") if not f.name.startswith(".")]
-    
-    # If input directory contains a game directly at root and no valid subdirectories
-    if (top_exes or (INPUT_DIR / "Binaries").exists() or list(INPUT_DIR.glob("appmanifest_*.acf"))) and len(valid_subdirs) == 0:
-        if is_valid_game_dir(INPUT_DIR):
-            return [inspect_game_folder(INPUT_DIR)]
+    # 4. Check if input_dir itself is a single standalone game
+    top_exes = [f for f in input_dir.glob("*.exe") if not f.name.startswith(".")]
+    if len(valid_subdirs) == 0 and (top_exes or (input_dir / "Binaries").exists() or list(input_dir.glob("appmanifest_*.acf"))):
+        if is_valid_game_dir(input_dir):
+            return [input_dir]
 
-    # Otherwise enumerate only valid game subdirectories
-    games = []
-    for sdir in sorted(valid_subdirs, key=lambda p: p.name.lower()):
+    return valid_subdirs
+
+
+def scan_input_library() -> List[Dict[str, Any]]:
+    """
+    Scans INPUT_DIR for genuine game backups.
+    Filters out dependencies (e.g. Steamworks Shared, DirectX, vcredist),
+    container folders, and deduplicates multiple copies/backups of the same game.
+    """
+    candidate_dirs = find_candidate_game_dirs(INPUT_DIR)
+    if not candidate_dirs:
+        return []
+
+    scanned_games: List[Dict[str, Any]] = []
+    for gdir in candidate_dirs:
         try:
-            games.append(inspect_game_folder(sdir))
+            game_info = inspect_game_folder(gdir)
+            # Filter out dependencies by AppID or folder name
+            if game_info.get("app_id") in REDIST_TOOL_APP_IDS or is_dependency_dir(game_info.get("folder_name", "")):
+                continue
+            # Ensure at least one candidate or primary_exe exists
+            if not game_info.get("candidates") and not game_info.get("primary_exe"):
+                continue
+            scanned_games.append(game_info)
         except Exception as e:
-            print(f"[Library] Warning: Error inspecting {sdir.name}: {e}")
+            print(f"[Library] Warning: Error inspecting {gdir.name}: {e}")
 
-    return games
+    # Deduplication pass:
+    # Multiple directories may exist for the same game (e.g. "Doom 3", "Doom 3 [208200]",
+    # duplicate backup folders, or symlinks).
+    # We maintain index by:
+    # 1. canonical real path
+    # 2. app_id (if valid)
+    # 3. clean title slug (alphanumeric lowercase)
+    def game_quality_score(g: Dict[str, Any]) -> int:
+        score = 0
+        if g.get("has_goldberg"):
+            score += 100
+        if g.get("has_saves"):
+            score += 50
+        if g.get("app_id"):
+            score += 40
+        if g.get("primary_exe"):
+            score += 30
+        score += min(int(g.get("size_bytes", 0) / (1024 * 1024 * 100)), 50)
+        fn_lower = g.get("folder_name", "").lower()
+        if any(bad in fn_lower for bad in ["copy", "backup", ".bak", "old"]):
+            score -= 60
+        return score
+
+    unique_by_id: Dict[str, Dict[str, Any]] = {}
+    unique_by_title: Dict[str, Dict[str, Any]] = {}
+    unique_by_path: Dict[str, Dict[str, Any]] = {}
+
+    for game in scanned_games:
+        real_path = str(Path(game["path"]).resolve())
+        app_id = game.get("app_id")
+        title_slug = re.sub(r"[^a-z0-9]", "", game.get("title", "").lower())
+
+        # Check if an existing game matches any key
+        existing = unique_by_path.get(real_path)
+        if not existing and app_id:
+            existing = unique_by_id.get(app_id)
+        if not existing and title_slug:
+            existing = unique_by_title.get(title_slug)
+
+        if existing:
+            # Duplicate found! Keep whichever has the higher quality score
+            if game_quality_score(game) > game_quality_score(existing):
+                old_path = str(Path(existing["path"]).resolve())
+                old_id = existing.get("app_id")
+                old_slug = re.sub(r"[^a-z0-9]", "", existing.get("title", "").lower())
+                unique_by_path.pop(old_path, None)
+                if old_id:
+                    unique_by_id.pop(old_id, None)
+                if old_slug:
+                    unique_by_title.pop(old_slug, None)
+
+                unique_by_path[real_path] = game
+                if app_id:
+                    unique_by_id[app_id] = game
+                if title_slug:
+                    unique_by_title[title_slug] = game
+        else:
+            unique_by_path[real_path] = game
+            if app_id:
+                unique_by_id[app_id] = game
+            if title_slug:
+                unique_by_title[title_slug] = game
+
+    # Collect unique list preserving object identity
+    seen_ptrs = set()
+    deduped: List[Dict[str, Any]] = []
+    for g in unique_by_path.values():
+        ptr = id(g)
+        if ptr not in seen_ptrs:
+            seen_ptrs.add(ptr)
+            deduped.append(g)
+
+    deduped.sort(key=lambda g: g.get("title", "").lower())
+    return deduped

@@ -159,6 +159,67 @@ class TestAppModules(unittest.TestCase):
         self.assertIn("Unreal Shipping", info["candidates"][0]["tag"])
         self.assertEqual(info["primary_exe"], "Binaries\\Win64\\UnrealGame-Win64-Shipping.exe")
 
+    def test_dependency_dir_exclusions(self):
+        """Verify that Steamworks Shared, DirectX, and redist folders are excluded."""
+        sw_dir = self.root / "Steamworks Shared"
+        sw_dir.mkdir(parents=True, exist_ok=True)
+        (sw_dir / "DXSETUP.exe").write_bytes(b"DXSETUP")
+        (sw_dir / "steam_appid.txt").write_text("228980\n", encoding="utf-8")
+
+        redist_dir = self.root / "_CommonRedist"
+        redist_dir.mkdir(parents=True, exist_ok=True)
+        (redist_dir / "vcredist_x64.exe").write_bytes(b"VCREDIST")
+
+        dx_dir = self.root / "DirectX"
+        dx_dir.mkdir(parents=True, exist_ok=True)
+        (dx_dir / "dxsetup.exe").write_bytes(b"DXSETUP")
+
+        self.assertFalse(is_valid_game_dir(sw_dir))
+        self.assertFalse(is_valid_game_dir(redist_dir))
+        self.assertFalse(is_valid_game_dir(dx_dir))
+
+    def test_library_deduplication(self):
+        """Verify scan_input_library removes duplicate game listings and dependencies."""
+        import app.library
+        orig_input = app.library.INPUT_DIR
+        try:
+            app.library.INPUT_DIR = self.root
+
+            # Create duplicates
+            dup_hl2 = self.root / "Half-Life 2 [220]"
+            dup_hl2.mkdir(parents=True, exist_ok=True)
+            (dup_hl2 / "hl2.exe").write_bytes(b"HL2" * 100)
+            (dup_hl2 / "steam_appid.txt").write_text("220\n", encoding="utf-8")
+
+            dup_cp = self.root / "Cyberpunk 2077_backup"
+            dup_cp.mkdir(parents=True, exist_ok=True)
+            (dup_cp / "Cyberpunk2077.exe").write_bytes(b"CP" * 100)
+            (dup_cp / "steam_appid.txt").write_text("1091500\n", encoding="utf-8")
+
+            # Dependency folder in input
+            dep_dir = self.root / "Steamworks Shared (228980)"
+            dep_dir.mkdir(parents=True, exist_ok=True)
+            (dep_dir / "DXSETUP.exe").write_bytes(b"DX")
+            (dep_dir / "steam_appid.txt").write_text("228980\n", encoding="utf-8")
+
+            games = scan_input_library()
+            titles = [g["title"] for g in games]
+            app_ids = [g["app_id"] for g in games if g["app_id"]]
+
+            # Verify no duplicates
+            self.assertEqual(len(app_ids), len(set(app_ids)))
+            self.assertEqual(len(titles), len(set(titles)))
+
+            # Verify Steamworks Shared is not present
+            self.assertNotIn("228980", app_ids)
+            self.assertFalse(any("steamworks" in t.lower() for t in titles))
+
+            # Verify legitimate games exist
+            self.assertIn("Half Life 2", titles)
+            self.assertIn("Cyberpunk 2077", titles)
+        finally:
+            app.library.INPUT_DIR = orig_input
+
 
 if __name__ == "__main__":
     unittest.main()

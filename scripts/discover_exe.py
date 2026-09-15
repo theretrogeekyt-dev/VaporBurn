@@ -70,16 +70,48 @@ SYSTEM_DIR_BLACKLIST = {
     "@eadir", "@tmp", "@sharebin", "#recycle", "#snapshot", "lost+found",
     "system volume information", "$recycle.bin", "recycler", "appdata",
     "saves", "goldberg saves", "redistributables", "_commonredist", "redist",
-    "prerequisites", "steamapps", "depotcache", "downloading", "temp", "tmp"
+    "prerequisites", "steamapps", "depotcache", "downloading", "temp", "tmp",
+    "common", "commonredist", "dependencies", "installers", "directx",
+    "vcredist", "vc_redist", "dotnet", "dotnetfx", "openal", "physx",
+    "steamworks shared", "steamworks_shared", "steamworksshared", "steamworks",
+    "support", "xna"
+}
+
+# Known Steam AppIDs corresponding to runtime tools, redistributables, or system packages (not playable games)
+REDIST_TOOL_APP_IDS = {
+    "228980",  # Steamworks Shared
+    "228988",  # Steamworks Shared DirectX
+    "228989",  # Steamworks Shared VC++
+    "228990",  # Steamworks Shared .NET
+    "1070560", # Steam Linux Runtime
+    "1391110", # Steam Linux Runtime - Soldier
+    "1628350", # Steam Linux Runtime - Sniper
+    "241100",  # Steam Controller Configs
+    "250820",  # SteamVR
+    "1007",    # Steam Package
 }
 
 
+def is_dependency_dir(name: str) -> bool:
+    """Returns True if folder name indicates a redistributable/dependency package."""
+    clean = re.sub(r"[_\-\.]+", " ", name.lower()).strip()
+    keywords = [
+        "steamworks shared", "steamworks", "commonredist", "common redist",
+        "redistributables", "redistributable", "redist", "prerequisites",
+        "prereq", "installers", "dependencies", "directx", "vcredist",
+        "vc redist", "dotnet", "dotnetfx", "openal", "physx"
+    ]
+    return any(clean == k or clean.startswith(k + " ") or clean.endswith(" " + k) or f" {k} " in f" {clean} " for k in keywords)
+
+
 def is_system_or_ignored_dir(name: str) -> bool:
-    """Returns True if the directory name matches NAS or OS system folder patterns."""
+    """Returns True if the directory name matches NAS, OS, or dependency folder patterns."""
     lower = name.lower().strip()
     if lower.startswith(("@", ".", "#", "$", "~")):
         return True
-    return lower in SYSTEM_DIR_BLACKLIST
+    if lower in SYSTEM_DIR_BLACKLIST:
+        return True
+    return is_dependency_dir(name)
 
 
 def extract_steam_manifest_info(game_root: Path) -> Dict[str, Optional[str]]:
@@ -139,23 +171,50 @@ def find_steam_appid(game_root: Path) -> Optional[str]:
 def is_valid_game_dir(game_root: Path) -> bool:
     """
     Determines if a directory contains a valid game installation.
-    Excludes NAS thumbnail folders like @eaDir, recycle bins, and empty folders.
+    Excludes NAS thumbnail folders like @eaDir, recycle bins, empty folders,
+    container folders (e.g. parent 'common' with multiple games),
+    and dependency packages (e.g. Steamworks Shared, DirectX, vcredist).
     """
-    if is_system_or_ignored_dir(game_root.name):
-        return False
-
     if not game_root.is_dir():
         return False
 
-    # Check for steam manifest or appid
-    if extract_steam_manifest_info(game_root).get("app_id"):
-        return True
+    if is_system_or_ignored_dir(game_root.name):
+        return False
 
-    # Check for steam dlls
-    if list(game_root.glob("steam_api*.dll")) or list(game_root.rglob("steam_api*.dll")):
-        return True
+    # Check detected Steam AppID: reject known redistributable / runtime tool AppIDs
+    manifest_info = extract_steam_manifest_info(game_root)
+    app_id = manifest_info.get("app_id")
+    if app_id and app_id in REDIST_TOOL_APP_IDS:
+        return False
 
-    # Check for any valid executable that is not in the blacklist
+    # Reject container directories that house multiple independent game installations
+    # (e.g. parent folders like 'common' containing 2+ distinct game folders)
+    try:
+        child_dirs = [d for d in game_root.iterdir() if d.is_dir() and not is_system_or_ignored_dir(d.name)]
+        sub_game_count = 0
+        for cd in child_dirs:
+            if (cd / "steam_appid.txt").exists() or list(cd.glob("appmanifest_*.acf")):
+                sub_game_count += 1
+            elif list(cd.glob("*.exe")) or (cd / "Binaries").exists():
+                sub_game_count += 1
+            if sub_game_count >= 2:
+                return False
+    except OSError:
+        pass
+
+    # A genuine game MUST have at least one valid, non-blacklisted executable
+    for exe in game_root.glob("*.exe"):
+        if not is_blacklisted(exe.name):
+            return True
+
+    for exe in game_root.glob("*/*.exe"):
+        if not is_blacklisted(exe.name):
+            return True
+
+    for exe in game_root.glob("*/*/*.exe"):
+        if not is_blacklisted(exe.name):
+            return True
+
     for exe in game_root.rglob("*.exe"):
         if not is_blacklisted(exe.name):
             return True
@@ -474,6 +533,8 @@ def discover_all_executables(game_root: Path, game_folder_name: str) -> List[Dic
         })
 
     if not candidates:
+        if not all_exes:
+            return []
         # Fallback to largest executable
         best = max(all_exes, key=lambda f: f.stat().st_size)
         rel_exe = str(best.relative_to(game_root)).replace("/", "\\")

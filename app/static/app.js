@@ -95,8 +95,22 @@ function renderGames(games) {
     return;
   }
 
+  // Deduplication safeguard by AppID and Title
+  const seenIds = new Set();
+  const seenTitles = new Set();
+  const uniqueGames = [];
+  for (const g of games) {
+    const idKey = g.app_id ? `appid:${g.app_id}` : null;
+    const titleKey = g.title ? `title:${g.title.toLowerCase().replace(/[^a-z0-9]/g, "")}` : null;
+    if (idKey && seenIds.has(idKey)) continue;
+    if (titleKey && seenTitles.has(titleKey)) continue;
+    if (idKey) seenIds.add(idKey);
+    if (titleKey) seenTitles.add(titleKey);
+    uniqueGames.push(g);
+  }
+
   empty.style.display = "none";
-  grid.innerHTML = games.map(game => {
+  grid.innerHTML = uniqueGames.map(game => {
     const goldbergBadge = game.has_goldberg
       ? `<span class="badge badge-steam" title="Goldberg Steam API detected">Goldberg Ready</span>`
       : "";
@@ -124,7 +138,6 @@ function renderGames(games) {
           <div class="card-tags">
             ${goldbergBadge}
             ${savesBadge}
-            ${game.redist_count > 0 ? `<span class="tag-pill">📦 ${game.redist_count} Redist(s)</span>` : ""}
             ${game.primary_exe ? `<span class="tag-pill" style="max-width: 140px; overflow:hidden; text-overflow:ellipsis;" title="${game.primary_exe}">⚙️ ${game.primary_exe}</span>` : ""}
           </div>
           <div class="card-actions">
