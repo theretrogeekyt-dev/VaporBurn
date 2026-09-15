@@ -19,6 +19,7 @@ from scripts.discover_exe import (
     extract_steam_manifest_info,
     is_valid_game_dir,
     is_dependency_dir,
+    is_system_or_ignored_dir,
     REDIST_TOOL_APP_IDS,
     find_goldberg_locations,
     find_save_data,
@@ -110,6 +111,19 @@ def resolve_steam_title(app_id: str, fallback_title: str) -> str:
     return fallback_title
 
 
+def get_base_folder_key(folder_name: str) -> str:
+    """
+    Normalizes folder name to identify true duplicate copies (e.g. - Copy, _backup, (1)).
+    Leaves distinct editions/versions intact.
+    """
+    clean = folder_name.strip()
+    # Strip bracketed AppID: [1091500] or (1091500)
+    clean = re.sub(r"\s*[\[\(]\d{3,8}[\]\)]\s*$", "", clean, flags=re.I)
+    # Strip copy / backup suffixes: - Copy, - Copy (2), (1), _backup, -backup, .bak, _old
+    clean = re.sub(r"(\s*[-_]\s*copy(\s*\(\d+\))?|\s*\(\d+\)|\.bak|[-_]backup|[-_]old)$", "", clean, flags=re.I)
+    return re.sub(r"[^a-z0-9]", "", clean.lower())
+
+
 def inspect_game_folder(game_dir: Path) -> Dict[str, Any]:
     """Extracts rich metadata for a single game directory."""
     folder_name = game_dir.name
@@ -118,11 +132,24 @@ def inspect_game_folder(game_dir: Path) -> Dict[str, Any]:
     # 1. Extract metadata from Steam manifests or appid files
     manifest_info = extract_steam_manifest_info(game_dir)
     app_id = manifest_info.get("app_id")
-    
-    # Resolve best title
-    if manifest_info.get("title"):
-        title = manifest_info["title"]
-    elif app_id:
+    manifest_title = manifest_info.get("title")
+
+    # Check if folder name contains edition / version keywords
+    # (e.g. "Alpha 1", "Beta", "Demo", "Episode One", "Resurrection of Evil", "BFG Edition")
+    edition_keywords = {
+        "alpha", "beta", "demo", "prologue", "episode", "resurrection",
+        "edition", "remastered", "vr", "patch", "build", "standalone"
+    }
+    folder_lower = folder_name.lower()
+    has_edition_in_folder = any(kw in folder_lower for kw in edition_keywords)
+
+    # If folder name contains specific edition info, preserve it so distinct builds don't collide
+    if has_edition_in_folder:
+        title = fallback_title
+    elif manifest_title:
+        title = manifest_title
+    elif app_id and (re.match(r"^\d+$", folder_name) or folder_lower in {"game", "app", "steam"}):
+        # Folder name is completely uninformative (e.g. "208200" or "game"), resolve from cache/API
         title = resolve_steam_title(app_id, fallback_title)
     else:
         title = fallback_title
@@ -164,39 +191,64 @@ def find_candidate_game_dirs(input_dir: Path) -> List[Path]:
     """
     Discovers candidate game directories inside input_dir.
     Supports:
-    1. Steam library layout: /input/steamapps/common/<Game>
-    2. Common container layout: /input/common/<Game>
-    3. Direct subdirectories: /input/<Game>
+    1. Direct subdirectories: /input/<Game>
+    2. Steam library layout: /input/steamapps/common/<Game>
+    3. Common container layout: /input/common/<Game>
     4. Standalone root game: /input is itself a game
     """
     if not input_dir.exists() or not input_dir.is_dir():
         return []
 
-    # 1. Check for steamapps/common structure
+    candidates: List[Path] = []
+
+    # 1. Direct subdirectories
+    try:
+        for p in input_dir.iterdir():
+            if not p.is_dir() or is_system_or_ignored_dir(p.name):
+                continue
+            if is_valid_game_dir(p):
+                candidates.append(p)
+    except OSError:
+        pass
+
+    # 2. Check for steamapps/common structure
     steam_common = input_dir / "steamapps" / "common"
     if steam_common.exists() and steam_common.is_dir():
-        common_candidates = [d for d in steam_common.iterdir() if d.is_dir() and is_valid_game_dir(d)]
-        if common_candidates:
-            return common_candidates
+        try:
+            for p in steam_common.iterdir():
+                if p.is_dir() and not is_system_or_ignored_dir(p.name) and is_valid_game_dir(p):
+                    candidates.append(p)
+        except OSError:
+            pass
 
-    # 2. Check for common/ container directly in input
+    # 3. Check for common/ container directly in input
     direct_common = input_dir / "common"
     if direct_common.exists() and direct_common.is_dir():
-        common_candidates = [d for d in direct_common.iterdir() if d.is_dir() and is_valid_game_dir(d)]
-        if common_candidates:
-            return common_candidates
-
-    # 3. Enumerate direct subdirectories
-    subdirs = [p for p in input_dir.iterdir() if p.is_dir()]
-    valid_subdirs = [s for s in subdirs if is_valid_game_dir(s)]
+        try:
+            for p in direct_common.iterdir():
+                if p.is_dir() and not is_system_or_ignored_dir(p.name) and is_valid_game_dir(p):
+                    candidates.append(p)
+        except OSError:
+            pass
 
     # 4. Check if input_dir itself is a single standalone game
-    top_exes = [f for f in input_dir.glob("*.exe") if not f.name.startswith(".")]
-    if len(valid_subdirs) == 0 and (top_exes or (input_dir / "Binaries").exists() or list(input_dir.glob("appmanifest_*.acf"))):
+    if not candidates:
         if is_valid_game_dir(input_dir):
             return [input_dir]
 
-    return valid_subdirs
+    # Deduplicate candidate paths by canonical real path
+    seen = set()
+    unique_candidates: List[Path] = []
+    for c in candidates:
+        try:
+            resolved = str(c.resolve())
+        except Exception:
+            resolved = str(c)
+        if resolved not in seen:
+            seen.add(resolved)
+            unique_candidates.append(c)
+
+    return unique_candidates
 
 
 def scan_input_library() -> List[Dict[str, Any]]:
@@ -225,11 +277,7 @@ def scan_input_library() -> List[Dict[str, Any]]:
 
     # Deduplication pass:
     # Multiple directories may exist for the same game (e.g. "Doom 3", "Doom 3 [208200]",
-    # duplicate backup folders, or symlinks).
-    # We maintain index by:
-    # 1. canonical real path
-    # 2. app_id (if valid)
-    # 3. clean title slug (alphanumeric lowercase)
+    # duplicate backup folders like "Doom 3 - Copy" or "Doom 3_backup", or symlinks).
     def game_quality_score(g: Dict[str, Any]) -> int:
         score = 0
         if g.get("has_goldberg"):
@@ -246,54 +294,39 @@ def scan_input_library() -> List[Dict[str, Any]]:
             score -= 60
         return score
 
-    unique_by_id: Dict[str, Dict[str, Any]] = {}
-    unique_by_title: Dict[str, Dict[str, Any]] = {}
     unique_by_path: Dict[str, Dict[str, Any]] = {}
+    unique_by_base_key: Dict[str, Dict[str, Any]] = {}
 
     for game in scanned_games:
         real_path = str(Path(game["path"]).resolve())
-        app_id = game.get("app_id")
-        title_slug = re.sub(r"[^a-z0-9]", "", game.get("title", "").lower())
+        base_key = get_base_folder_key(game["folder_name"])
+        app_id = game.get("app_id") or ""
 
-        # Check if an existing game matches any key
+        # Check for path duplicate
         existing = unique_by_path.get(real_path)
-        if not existing and app_id:
-            existing = unique_by_id.get(app_id)
-        if not existing and title_slug:
-            existing = unique_by_title.get(title_slug)
+        if not existing:
+            # Check for explicit copy / backup duplicate
+            # (only if base_key matches AND either app_id matches or one has no app_id)
+            cand = unique_by_base_key.get(base_key)
+            if cand:
+                cand_id = cand.get("app_id") or ""
+                if not app_id or not cand_id or app_id == cand_id:
+                    existing = cand
 
         if existing:
             # Duplicate found! Keep whichever has the higher quality score
             if game_quality_score(game) > game_quality_score(existing):
                 old_path = str(Path(existing["path"]).resolve())
-                old_id = existing.get("app_id")
-                old_slug = re.sub(r"[^a-z0-9]", "", existing.get("title", "").lower())
+                old_base_key = get_base_folder_key(existing["folder_name"])
                 unique_by_path.pop(old_path, None)
-                if old_id:
-                    unique_by_id.pop(old_id, None)
-                if old_slug:
-                    unique_by_title.pop(old_slug, None)
+                unique_by_base_key.pop(old_base_key, None)
 
                 unique_by_path[real_path] = game
-                if app_id:
-                    unique_by_id[app_id] = game
-                if title_slug:
-                    unique_by_title[title_slug] = game
+                unique_by_base_key[base_key] = game
         else:
             unique_by_path[real_path] = game
-            if app_id:
-                unique_by_id[app_id] = game
-            if title_slug:
-                unique_by_title[title_slug] = game
+            unique_by_base_key[base_key] = game
 
-    # Collect unique list preserving object identity
-    seen_ptrs = set()
-    deduped: List[Dict[str, Any]] = []
-    for g in unique_by_path.values():
-        ptr = id(g)
-        if ptr not in seen_ptrs:
-            seen_ptrs.add(ptr)
-            deduped.append(g)
-
+    deduped = list(unique_by_path.values())
     deduped.sort(key=lambda g: g.get("title", "").lower())
     return deduped

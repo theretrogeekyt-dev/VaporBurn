@@ -220,6 +220,135 @@ class TestAppModules(unittest.TestCase):
         finally:
             app.library.INPUT_DIR = orig_input
 
+    def test_unreal_and_source2_engine_discovery(self):
+        """Verify Unreal Engine and Source 2 directory structures with multiple binary folders are valid games."""
+        # 1. Unreal Engine 4 / 5 game layout (e.g. Hello Neighbor, Splitgate, Borderlands 2)
+        ue_dir = self.root / "Hello Neighbor"
+        (ue_dir / "Engine" / "Binaries" / "ThirdParty").mkdir(parents=True, exist_ok=True)
+        (ue_dir / "Engine" / "Binaries" / "ThirdParty" / "utility.exe").write_bytes(b"UTIL" * 50)
+        (ue_dir / "HelloNeighbor" / "Binaries" / "Win64").mkdir(parents=True, exist_ok=True)
+        shipping_exe = ue_dir / "HelloNeighbor" / "Binaries" / "Win64" / "HelloNeighbor-Win64-Shipping.exe"
+        shipping_exe.write_bytes(b"SHIPPING" * 10000)
+        (ue_dir / "steam_appid.txt").write_text("521890\n", encoding="utf-8")
+
+        # 2. Source 2 game layout (e.g. Counter-Strike 2, Aperture Desk Job)
+        s2_dir = self.root / "Counter-Strike 2"
+        (s2_dir / "game" / "bin" / "win64").mkdir(parents=True, exist_ok=True)
+        (s2_dir / "content" / "bin").mkdir(parents=True, exist_ok=True)
+        (s2_dir / "game" / "bin" / "win64" / "cs2.exe").write_bytes(b"CS2" * 10000)
+        (s2_dir / "steam_appid.txt").write_text("730\n", encoding="utf-8")
+
+        self.assertTrue(is_valid_game_dir(ue_dir), "Unreal Engine game must pass is_valid_game_dir")
+        self.assertTrue(is_valid_game_dir(s2_dir), "Source 2 game must pass is_valid_game_dir")
+
+        ue_info = inspect_game_folder(ue_dir)
+        self.assertEqual(ue_info["title"], "Hello Neighbor")
+        self.assertIn("HelloNeighbor-Win64-Shipping.exe", ue_info["primary_exe"])
+
+        s2_info = inspect_game_folder(s2_dir)
+        self.assertEqual(s2_info["title"], "Counter Strike 2")
+        self.assertIn("cs2.exe", s2_info["primary_exe"])
+
+    def test_multi_alpha_and_edition_sharing_appid_preserved(self):
+        """Verify that distinct versions, alphas, and betas sharing an AppID are NOT merged."""
+        import app.library
+        with tempfile.TemporaryDirectory() as temp_input:
+            temp_path = Path(temp_input)
+            orig_input = app.library.INPUT_DIR
+            try:
+                app.library.INPUT_DIR = temp_path
+
+                # Create 3 distinct alphas of Hello Neighbor sharing AppID 521890
+                alpha1 = temp_path / "Hello Neighbor Alpha 1"
+                (alpha1 / "Binaries" / "Win64").mkdir(parents=True, exist_ok=True)
+                (alpha1 / "Binaries" / "Win64" / "HelloNeighbor-Win64-Shipping.exe").write_bytes(b"A1" * 1000)
+                (alpha1 / "steam_appid.txt").write_text("521890\n", encoding="utf-8")
+
+                alpha2 = temp_path / "Hello Neighbor Alpha 2"
+                (alpha2 / "Binaries" / "Win64").mkdir(parents=True, exist_ok=True)
+                (alpha2 / "Binaries" / "Win64" / "HelloNeighbor-Win64-Shipping.exe").write_bytes(b"A2" * 1000)
+                (alpha2 / "steam_appid.txt").write_text("521890\n", encoding="utf-8")
+
+                alpha3 = temp_path / "Hello Neighbor Alpha 3"
+                (alpha3 / "Binaries" / "Win64").mkdir(parents=True, exist_ok=True)
+                (alpha3 / "Binaries" / "Win64" / "HelloNeighbor-Win64-Shipping.exe").write_bytes(b"A3" * 1000)
+                (alpha3 / "steam_appid.txt").write_text("521890\n", encoding="utf-8")
+
+                # Create an explicit duplicate copy of Alpha 1
+                alpha1_copy = temp_path / "Hello Neighbor Alpha 1 - Copy"
+                (alpha1_copy / "Binaries" / "Win64").mkdir(parents=True, exist_ok=True)
+                (alpha1_copy / "Binaries" / "Win64" / "HelloNeighbor-Win64-Shipping.exe").write_bytes(b"A1_CPY" * 100)
+                (alpha1_copy / "steam_appid.txt").write_text("521890\n", encoding="utf-8")
+
+                games = scan_input_library()
+                titles = [g["title"] for g in games]
+
+                # All 3 alphas must be preserved!
+                self.assertEqual(len(games), 3)
+                self.assertIn("Hello Neighbor Alpha 1", titles)
+                self.assertIn("Hello Neighbor Alpha 2", titles)
+                self.assertIn("Hello Neighbor Alpha 3", titles)
+                # The explicit copy must have been merged
+                self.assertNotIn("Hello Neighbor Alpha 1 - Copy", titles)
+            finally:
+                app.library.INPUT_DIR = orig_input
+
+    def test_standalone_expansions_preserved(self):
+        """Verify that DOOM 3 and DOOM 3 Resurrection of Evil are both discovered and distinct."""
+        import app.library
+        with tempfile.TemporaryDirectory() as temp_input:
+            temp_path = Path(temp_input)
+            orig_input = app.library.INPUT_DIR
+            try:
+                app.library.INPUT_DIR = temp_path
+
+                d3 = temp_path / "DOOM 3"
+                d3.mkdir(parents=True, exist_ok=True)
+                (d3 / "Doom3.exe").write_bytes(b"DOOM3" * 1000)
+                (d3 / "steam_appid.txt").write_text("208200\n", encoding="utf-8")
+
+                d3_roe = temp_path / "DOOM 3 Resurrection of Evil"
+                d3_roe.mkdir(parents=True, exist_ok=True)
+                (d3_roe / "Doom3.exe").write_bytes(b"ROE" * 1000)
+                (d3_roe / "steam_appid.txt").write_text("208200\n", encoding="utf-8")
+
+                games = scan_input_library()
+                self.assertEqual(len(games), 2)
+                titles = [g["title"] for g in games]
+                self.assertIn("Doom 3", titles)
+                self.assertIn("Doom 3 Resurrection Of Evil", titles)
+            finally:
+                app.library.INPUT_DIR = orig_input
+
+    def test_nested_library_structure_discovery(self):
+        """Verify find_candidate_game_dirs finds games in root, steamapps/common, and common."""
+        from app.library import find_candidate_game_dirs
+        with tempfile.TemporaryDirectory() as temp_input:
+            root = Path(temp_input)
+
+            # Direct game in root
+            root_game = root / "Portal"
+            root_game.mkdir(parents=True, exist_ok=True)
+            (root_game / "hl2.exe").write_bytes(b"PORTAL" * 100)
+
+            # Game in steamapps/common
+            steam_game = root / "steamapps" / "common" / "Half-Life 2"
+            steam_game.mkdir(parents=True, exist_ok=True)
+            (steam_game / "hl2.exe").write_bytes(b"HL2" * 100)
+
+            # Game in common
+            common_game = root / "common" / "Left 4 Dead"
+            common_game.mkdir(parents=True, exist_ok=True)
+            (common_game / "left4dead.exe").write_bytes(b"L4D" * 100)
+
+            candidates = find_candidate_game_dirs(root)
+            cand_names = [c.name for c in candidates]
+
+            self.assertIn("Portal", cand_names)
+            self.assertIn("Half-Life 2", cand_names)
+            self.assertIn("Left 4 Dead", cand_names)
+            self.assertEqual(len(candidates), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

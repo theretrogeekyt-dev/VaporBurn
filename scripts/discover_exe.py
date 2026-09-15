@@ -172,7 +172,6 @@ def is_valid_game_dir(game_root: Path) -> bool:
     """
     Determines if a directory contains a valid game installation.
     Excludes NAS thumbnail folders like @eaDir, recycle bins, empty folders,
-    container folders (e.g. parent 'common' with multiple games),
     and dependency packages (e.g. Steamworks Shared, DirectX, vcredist).
     """
     if not game_root.is_dir():
@@ -187,37 +186,24 @@ def is_valid_game_dir(game_root: Path) -> bool:
     if app_id and app_id in REDIST_TOOL_APP_IDS:
         return False
 
-    # Reject container directories that house multiple independent game installations
-    # (e.g. parent folders like 'common' containing 2+ distinct game folders)
+    # A genuine game MUST have at least one valid, non-blacklisted executable.
+    # Check up to 5 directory levels deep to support Unreal Engine (Binaries/Win64)
+    # and Source 2 (game/bin/win64).
     try:
-        child_dirs = [d for d in game_root.iterdir() if d.is_dir() and not is_system_or_ignored_dir(d.name)]
-        sub_game_count = 0
-        for cd in child_dirs:
-            if (cd / "steam_appid.txt").exists() or list(cd.glob("appmanifest_*.acf")):
-                sub_game_count += 1
-            elif list(cd.glob("*.exe")) or (cd / "Binaries").exists():
-                sub_game_count += 1
-            if sub_game_count >= 2:
-                return False
+        for exe in game_root.rglob("*.exe"):
+            try:
+                rel = exe.relative_to(game_root)
+                if len(rel.parts) > 6:
+                    continue
+                # Skip if any parent folder in the relative path is an ignored/system/redist dir
+                if any(is_system_or_ignored_dir(part) for part in rel.parts[:-1]):
+                    continue
+                if not is_blacklisted(exe.name):
+                    return True
+            except (ValueError, OSError):
+                continue
     except OSError:
         pass
-
-    # A genuine game MUST have at least one valid, non-blacklisted executable
-    for exe in game_root.glob("*.exe"):
-        if not is_blacklisted(exe.name):
-            return True
-
-    for exe in game_root.glob("*/*.exe"):
-        if not is_blacklisted(exe.name):
-            return True
-
-    for exe in game_root.glob("*/*/*.exe"):
-        if not is_blacklisted(exe.name):
-            return True
-
-    for exe in game_root.rglob("*.exe"):
-        if not is_blacklisted(exe.name):
-            return True
 
     return False
 
@@ -412,6 +398,12 @@ def discover_all_executables(game_root: Path, game_folder_name: str) -> List[Dic
 
     for exe in all_exes:
         if is_blacklisted(exe.name):
+            continue
+        try:
+            rel = exe.relative_to(game_root)
+            if any(is_system_or_ignored_dir(part) for part in rel.parts[:-1]):
+                continue
+        except (ValueError, OSError):
             continue
 
         score = 0

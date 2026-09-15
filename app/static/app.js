@@ -122,17 +122,13 @@ function renderGames(games) {
     return;
   }
 
-  // Deduplication safeguard by AppID and Title
-  const seenIds = new Set();
-  const seenTitles = new Set();
+  // Deduplication safeguard by unique folder path / folder name
+  const seenPaths = new Set();
   const uniqueGames = [];
   for (const g of games) {
-    const idKey = g.app_id ? `appid:${g.app_id}` : null;
-    const titleKey = g.title ? `title:${g.title.toLowerCase().replace(/[^a-z0-9]/g, "")}` : null;
-    if (idKey && seenIds.has(idKey)) continue;
-    if (titleKey && seenTitles.has(titleKey)) continue;
-    if (idKey) seenIds.add(idKey);
-    if (titleKey) seenTitles.add(titleKey);
+    const pathKey = g.path || g.folder_name;
+    if (seenPaths.has(pathKey)) continue;
+    seenPaths.add(pathKey);
     uniqueGames.push(g);
   }
 
