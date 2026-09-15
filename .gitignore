@@ -1,0 +1,29 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# VaporBurn Workspace & Test directories
+input/
+output/
+workspace/
+staging/
+*.iso
+*.sha256
+*.bin
+setup.exe
+*.log

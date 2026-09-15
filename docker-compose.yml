@@ -1,0 +1,24 @@
+services:
+  vaporburn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/theretrogeekyt-dev/vaporburn:latest
+    container_name: vaporburn
+    environment:
+      - PUID=1000                  # Host User ID
+      - PGID=1000                  # Host Group ID
+      - UMASK=002                  # Ensures correct file permissions
+      - DISC_TYPE=single           # single, dvd5, dvd9, bd25, or custom
+      # - DISC_SIZE_MB=8150        # Used if DISC_TYPE=custom
+      # - CHUNK_SIZE=4294967295    # Slice size (4GB FAT32 limit default)
+      # - GAME_TITLE=              # Optional: Explicit game title override
+      # - APP_ID=                  # Optional: Explicit Steam App ID override
+      # - MAIN_EXE=                # Optional: Relative path to game executable
+    volumes:
+      # Mount your VaporFetch game folder here (read-only for security)
+      - ./input:/input:ro
+      # Output directory where the final .iso and .sha256 will be written
+      - ./output:/output
+      # Optional scratch workspace for intermediate files
+      - ./workspace:/workspace
