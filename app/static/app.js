@@ -107,10 +107,12 @@ function renderGames(games) {
     return `
       <div class="game-card">
         <div class="card-banner-wrapper">
-          <img class="card-banner" src="${game.banner_url}" alt="${game.title}"
-               onerror="this.onerror=null;this.src='https://steamcdn-a.akamaihd.net/steam/apps/480/header.jpg';">
+          <img class="card-banner" src="${game.banner_url}" alt="${escapeHtml(game.title)}"
+               onerror="this.onerror=null;this.src='/static/default_banner.svg';">
           <div class="card-banner-overlay">
-            <span class="tag-pill" style="background: rgba(0,0,0,0.7); font-weight:700;">AppID: ${game.app_id}</span>
+            <span class="tag-pill" style="background: rgba(0,0,0,0.75); font-weight:700;">
+              ${game.app_id ? `AppID: ${game.app_id}` : `Offline Game`}
+            </span>
           </div>
         </div>
         <div class="card-body">

@@ -52,24 +52,109 @@ def is_blacklisted(filename: str) -> bool:
 
 
 def normalize_title(raw_name: str) -> str:
-    """Cleans directory name into a human-friendly game title."""
-    cleaned = re.sub(r"[_\-\.]+", " ", raw_name)
+    """Cleans directory name into a human-friendly game title, splitting PascalCase."""
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", raw_name)
+    spaced = re.sub(r"([a-zA-Z])([0-9])", r"\1 \2", spaced)
+    cleaned = re.sub(r"[_\-\.]+", " ", spaced)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned.title() if cleaned else raw_name
 
 
-def find_steam_appid(game_root: Path) -> Optional[str]:
-    """Scans for steam_appid.txt or appid.txt in common locations."""
-    candidates = list(game_root.rglob("steam_appid.txt")) + list(game_root.rglob("appid.txt"))
-    for cand in candidates:
+SYSTEM_DIR_BLACKLIST = {
+    "@eadir", "@tmp", "@sharebin", "#recycle", "#snapshot", "lost+found",
+    "system volume information", "$recycle.bin", "recycler", "appdata",
+    "saves", "goldberg saves", "redistributables", "_commonredist", "redist",
+    "prerequisites", "steamapps", "depotcache", "downloading", "temp", "tmp"
+}
+
+
+def is_system_or_ignored_dir(name: str) -> bool:
+    """Returns True if the directory name matches NAS or OS system folder patterns."""
+    lower = name.lower().strip()
+    if lower.startswith(("@", ".", "#", "$", "~")):
+        return True
+    return lower in SYSTEM_DIR_BLACKLIST
+
+
+def extract_steam_manifest_info(game_root: Path) -> Dict[str, Optional[str]]:
+    """
+    Extracts official Steam AppID and title from Steam appmanifest_*.acf,
+    steam_appid.txt, or folder name annotations.
+    """
+    # 1. Search for Steam appmanifest_*.acf (VaporFetch keeps these in game root)
+    manifest_candidates = list(game_root.glob("appmanifest_*.acf")) + list(game_root.rglob("appmanifest_*.acf"))
+    for manifest in manifest_candidates:
+        try:
+            fn_match = re.search(r"appmanifest_(\d+)\.acf", manifest.name, re.IGNORECASE)
+            fn_appid = fn_match.group(1) if fn_match else None
+
+            content = manifest.read_text(encoding="utf-8", errors="ignore")
+            appid_match = re.search(r'"appid"\s+"(\d+)"', content, re.IGNORECASE)
+            name_match = re.search(r'"name"\s+"([^"]+)"', content, re.IGNORECASE)
+
+            appid = appid_match.group(1) if appid_match else fn_appid
+            title = name_match.group(1) if name_match else None
+
+            if appid:
+                return {"app_id": appid, "title": title}
+        except Exception:
+            continue
+
+    # 2. Search for steam_appid.txt or appid.txt
+    txt_candidates = (
+        list(game_root.glob("steam_appid.txt"))
+        + list(game_root.glob("appid.txt"))
+        + list(game_root.rglob("steam_appid.txt"))
+        + list(game_root.rglob("appid.txt"))
+    )
+    for cand in txt_candidates:
         try:
             content = cand.read_text(encoding="utf-8", errors="ignore").strip()
             match = re.search(r"^\d+", content)
             if match:
-                return match.group(0)
+                return {"app_id": match.group(0), "title": None}
         except Exception:
             continue
-    return None
+
+    # 3. Check for bracketed AppID in folder name: e.g. "Cyberpunk 2077 [1091500]"
+    folder_match = re.search(r"[\[\(](\d{3,8})[\]\)]", game_root.name)
+    if folder_match:
+        clean_title = re.sub(r"[\[\(]\d{3,8}[\]\)]", "", game_root.name).strip()
+        return {"app_id": folder_match.group(1), "title": normalize_title(clean_title)}
+
+    return {"app_id": None, "title": None}
+
+
+def find_steam_appid(game_root: Path) -> Optional[str]:
+    """Returns detected Steam AppID, or None if unidentified (does NOT default to 480)."""
+    return extract_steam_manifest_info(game_root).get("app_id")
+
+
+def is_valid_game_dir(game_root: Path) -> bool:
+    """
+    Determines if a directory contains a valid game installation.
+    Excludes NAS thumbnail folders like @eaDir, recycle bins, and empty folders.
+    """
+    if is_system_or_ignored_dir(game_root.name):
+        return False
+
+    if not game_root.is_dir():
+        return False
+
+    # Check for steam manifest or appid
+    if extract_steam_manifest_info(game_root).get("app_id"):
+        return True
+
+    # Check for steam dlls
+    if list(game_root.glob("steam_api*.dll")) or list(game_root.rglob("steam_api*.dll")):
+        return True
+
+    # Check for any valid executable that is not in the blacklist
+    for exe in game_root.rglob("*.exe"):
+        if not is_blacklisted(exe.name):
+            return True
+
+    return False
 
 
 def find_goldberg_locations(game_root: Path) -> Dict[str, Any]:
@@ -303,12 +388,13 @@ def main():
         sys.exit(1)
 
     folder_name = game_root.name
-    game_title = args.game_title or normalize_title(folder_name)
-    app_id = args.app_id or find_steam_appid(game_root) or "480"
+    manifest_info = extract_steam_manifest_info(game_root)
+    game_title = args.game_title or manifest_info.get("title") or normalize_title(folder_name)
+    app_id = args.app_id or manifest_info.get("app_id") or ""
 
     print(f"[Discovery] Analyzing game directory: {game_root}")
     print(f"[Discovery] Detected Game Title: {game_title}")
-    print(f"[Discovery] Detected Steam App ID: {app_id}")
+    print(f"[Discovery] Detected Steam App ID: {app_id or 'None (Unknown)'}")
 
     # Primary executable
     if args.main_exe:
