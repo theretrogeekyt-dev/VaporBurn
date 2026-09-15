@@ -88,8 +88,25 @@
           </div>
         </div>
 
-        <div class="toolbar-right">
+        <div class="toolbar-right" style="display: flex; align-items: center; gap: 14px;">
           <span id="libCountText" style="font-size: 13px; color: var(--text-dim);">0 backups detected</span>
+          <button class="btn btn-secondary btn-sm" id="btnRescanLib" onclick="loadLibrary(true)">
+            🔄 Rescan Library
+          </button>
+        </div>
+      </div>
+
+      <!-- Loading State: Library Discovery in Progress -->
+      <div id="libraryLoading" class="loading-state" style="display: none;">
+        <div class="spinner-radar">
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring-inner"></div>
+          <div class="spinner-core">🔥</div>
+        </div>
+        <h3 class="loading-title">Discovering Game Backups...</h3>
+        <p class="loading-sub">Scanning <code>/input</code> for Steam manifests, executables, and game assets</p>
+        <div class="loading-bar-track">
+          <div class="loading-bar-ind"></div>
         </div>
       </div>
 

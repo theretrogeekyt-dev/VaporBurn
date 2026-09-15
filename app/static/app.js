@@ -69,7 +69,24 @@ async function loadStorage() {
 
 // ---------------- Library Management ---------------- //
 
-async function loadLibrary() {
+async function loadLibrary(showLoading = true) {
+  const loadingEl = document.getElementById("libraryLoading");
+  const gridEl = document.getElementById("gamesGrid");
+  const emptyEl = document.getElementById("emptyLibrary");
+  const rescanBtn = document.getElementById("btnRescanLib");
+  const countText = document.getElementById("libCountText");
+
+  if (showLoading && loadingEl) {
+    loadingEl.style.display = "flex";
+    if (gridEl) gridEl.style.display = "none";
+    if (emptyEl) emptyEl.style.display = "none";
+    if (rescanBtn) {
+      rescanBtn.disabled = true;
+      rescanBtn.innerHTML = `⏳ Scanning...`;
+    }
+    if (countText) countText.innerText = "Discovering backups in /input...";
+  }
+
   try {
     const res = await fetch("/api/library");
     const data = await res.json();
@@ -77,11 +94,21 @@ async function loadLibrary() {
 
     document.getElementById("libraryBadge").innerText = libraryGames.length;
     document.getElementById("libraryBadge").style.display = libraryGames.length > 0 ? "inline-block" : "none";
-    document.getElementById("libCountText").innerText = `${libraryGames.length} backup(s) detected`;
+    if (countText) countText.innerText = `${libraryGames.length} backup(s) detected`;
 
+    if (loadingEl) loadingEl.style.display = "none";
+    if (gridEl) gridEl.style.display = "grid";
     renderGames(libraryGames);
   } catch (err) {
     console.error("Failed loading library:", err);
+    if (loadingEl) loadingEl.style.display = "none";
+    if (emptyEl) emptyEl.style.display = "block";
+    if (countText) countText.innerText = "Scan failed";
+  } finally {
+    if (rescanBtn) {
+      rescanBtn.disabled = false;
+      rescanBtn.innerHTML = `🔄 Rescan Library`;
+    }
   }
 }
 
