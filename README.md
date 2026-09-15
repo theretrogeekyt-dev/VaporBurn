@@ -201,3 +201,4 @@ docker build -t vaporburn:local .
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+

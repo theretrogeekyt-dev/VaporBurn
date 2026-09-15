@@ -60,3 +60,4 @@ RUN dos2unix /app/entrypoint.sh /app/installer_template.iss /app/scripts/*.py \
 VOLUME ["/input", "/output"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
+

@@ -472,3 +472,4 @@ begin
     GenerateVerificationBatch(ExpandConstant('{app}'));
   end;
 end;
+

@@ -252,3 +252,4 @@ echo -e "Output Path:  ${OUTPUT_DIR}"
 echo -e "Generated Artifacts:"
 ls -lh "$OUTPUT_DIR"
 echo -e "\nYou can now mount or burn the generated .iso file(s) and run setup.exe on Windows!\n"
+
