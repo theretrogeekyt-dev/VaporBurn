@@ -247,6 +247,22 @@
             <input type="number" id="modalCustomSize" placeholder="e.g. 4480">
           </div>
 
+          <!-- Launch Executable Selection -->
+          <div class="form-group">
+            <label for="modalMainExe">🚀 Launch Executable</label>
+            <select id="modalMainExe" onchange="handleMainExeChange()">
+              <!-- Populated dynamically with ranked candidates -->
+            </select>
+            <div id="modalExeHint" style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">
+              Primary game binary to create shortcuts and launch after installation.
+            </div>
+          </div>
+
+          <div id="customExeGroup" class="form-group" style="display: none;">
+            <label for="modalCustomExe">Custom Executable Path (Relative to Game Root)</label>
+            <input type="text" id="modalCustomExe" placeholder="e.g. Binaries\Win64\CustomGame.exe">
+          </div>
+
           <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 6px 0;">
 
           <!-- Goldberg Emulator Settings -->

@@ -182,6 +182,45 @@ function openPackageModal(encodedGame) {
     document.getElementById("modalRestoreSaves").checked = false;
   }
 
+  // Populate Executable Candidates Dropdown
+  const exeSelect = document.getElementById("modalMainExe");
+  exeSelect.innerHTML = "";
+  const candidates = game.candidates || [];
+
+  if (candidates.length > 0) {
+    candidates.forEach((cand) => {
+      const opt = document.createElement("option");
+      opt.value = cand.rel_path;
+      const recPrefix = cand.is_recommended ? "★ [Recommended] " : "";
+      const tagText = cand.tag ? ` (${cand.tag})` : "";
+      opt.textContent = `${recPrefix}${cand.name} - ${cand.size_mb} MB${tagText}`;
+      if (cand.is_recommended) {
+        opt.selected = true;
+      }
+      exeSelect.appendChild(opt);
+    });
+
+    const customOpt = document.createElement("option");
+    customOpt.value = "__custom__";
+    customOpt.textContent = "✏️ Specify Custom Path Manually...";
+    exeSelect.appendChild(customOpt);
+  } else {
+    const fallbackOpt = document.createElement("option");
+    fallbackOpt.value = game.primary_exe || "Game.exe";
+    fallbackOpt.textContent = `★ ${game.primary_exe || "Game.exe"}`;
+    fallbackOpt.selected = true;
+    exeSelect.appendChild(fallbackOpt);
+
+    const customOpt = document.createElement("option");
+    customOpt.value = "__custom__";
+    customOpt.textContent = "✏️ Specify Custom Path Manually...";
+    exeSelect.appendChild(customOpt);
+  }
+
+  document.getElementById("customExeGroup").style.display = "none";
+  document.getElementById("modalCustomExe").value = "";
+  updateExeHint();
+
   document.getElementById("packageModal").classList.add("open");
 }
 
@@ -194,13 +233,37 @@ function handleDiscTypeChange() {
   document.getElementById("customSizeGroup").style.display = (type === "custom") ? "block" : "none";
 }
 
+function handleMainExeChange() {
+  const sel = document.getElementById("modalMainExe");
+  const isCustom = sel.value === "__custom__";
+  document.getElementById("customExeGroup").style.display = isCustom ? "block" : "none";
+  updateExeHint();
+}
+
+function updateExeHint() {
+  const sel = document.getElementById("modalMainExe");
+  const hint = document.getElementById("modalExeHint");
+  if (!sel || !hint) return;
+  if (sel.value === "__custom__") {
+    hint.textContent = "Type the path to your executable relative to the game folder root.";
+  } else {
+    hint.textContent = `Selected launch target: ${sel.value}`;
+  }
+}
+
 async function submitPackageJob(e) {
   e.preventDefault();
+
+  let chosenExe = document.getElementById("modalMainExe").value;
+  if (chosenExe === "__custom__") {
+    chosenExe = document.getElementById("modalCustomExe").value.trim();
+  }
 
   const payload = {
     folder_name: document.getElementById("modalFolderName").value,
     game_title: document.getElementById("modalGameTitle").value,
     app_id: document.getElementById("modalAppId").value,
+    main_exe: chosenExe || null,
     disc_type: document.getElementById("modalDiscType").value,
     disc_size_mb: parseInt(document.getElementById("modalCustomSize")?.value || "0") || 0,
     limit_ram: document.getElementById("modalLimitRam").checked,

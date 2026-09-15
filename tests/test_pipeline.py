@@ -31,6 +31,8 @@ from scripts.iso_packager import (
     plan_discs,
     sanitize_volid,
 )
+from app.builder import to_wine_path, generate_iss_script
+from app.config import TEMPLATE_ISS
 
 
 class TestVaporBurnPipeline(unittest.TestCase):
@@ -170,6 +172,49 @@ class TestVaporBurnPipeline(unittest.TestCase):
         self.assertEqual(len(discs), 2)
         self.assertEqual(discs[0]["disc_number"], 1)
         self.assertEqual(discs[1]["disc_number"], 2)
+
+    def test_iss_generation_and_wine_path(self):
+        """Verify generated Inno Setup script has properly formatted and typed defines."""
+        out_iss = Path(self.test_dir.name) / "installer.iss"
+        script_content = generate_iss_script(
+            target_iss_path=out_iss,
+            template_path=TEMPLATE_ISS,
+            config={
+                "GameName": 'Doom 3 Bfg Edition "Special"',
+                "AppVersion": "1.0",
+                "AppPublisher": "VaporFetch / VaporBurn",
+                "AppExe": "Doom3BFG.exe",
+                "AppExeDir": "",
+                "AppId": "208200",
+                "SourceDir": "Z:\\workspace\\staging",
+                "OutputDir": "Z:\\workspace\\installer_build",
+                "OutputBaseName": "setup",
+                "ChunkSize": "4294967295",
+                "HasDirectX": False,
+                "DirectXExe": "",
+                "HasVCRedist64": False,
+                "VCRedist64Exe": "",
+                "HasVCRedist86": False,
+                "VCRedist86Exe": "",
+                "HasSaves": False,
+                "SavesRelDir": "",
+            }
+        )
+        self.assertTrue(out_iss.exists())
+        self.assertIn('#define GameName "Doom 3 Bfg Edition ""Special"""', script_content)
+        self.assertIn('#define AppExe "Doom3BFG.exe"', script_content)
+        self.assertIn('#define AppId "208200"', script_content)
+        self.assertIn('#define HasDirectX 0', script_content)
+        self.assertIn('#define HasVCRedist64 0', script_content)
+        self.assertIn('#define HasSaves 0', script_content)
+        self.assertIn('AppId={{#AppId}-VAPORBURN}', script_content)
+
+        # Test Wine path conversion
+        p = Path("/workspace/job_123/staging")
+        wp = to_wine_path(p)
+        self.assertTrue(wp.startswith("Z:\\"))
+        self.assertIn("staging", wp)
+        self.assertNotIn("/", wp)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,73 @@ from scripts.sanitize_and_hash import scan_and_sanitize, write_manifest
 from scripts.iso_packager import plan_discs, build_iso, sanitize_volid, create_autorun_inf, MEDIA_PRESETS
 
 
+def to_wine_path(posix_path: Path) -> str:
+    """
+    Converts a POSIX path to a Wine Windows path (Z:\\...).
+    Wine maps the root filesystem / to Z:\\.
+    """
+    p_str = str(posix_path.resolve())
+    try:
+        res = subprocess.run(
+            ["winepath", "-w", p_str],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2,
+            env={**os.environ, "WINEPREFIX": os.environ.get("WINEPREFIX", "/tmp/wine"), "WINEDEBUG": "-all"}
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+
+    # Reliable canonical fallback: Wine maps / to Z:\
+    clean_path = p_str.replace("/", "\\").lstrip("\\")
+    return f"Z:\\{clean_path}"
+
+
+def generate_iss_script(target_iss_path: Path, template_path: Path, config: Dict[str, Any]) -> str:
+    """
+    Generates a dedicated, fully-defined Inno Setup script with properly typed and quoted
+    preprocessor directives. Prepending explicit defines avoids Wine CLI parameter
+    quoting/splitting bugs and ISPP type mismatch errors.
+    """
+    template_content = template_path.read_text(encoding="utf-8", errors="ignore")
+
+    def esc(val: Any) -> str:
+        return str(val).replace('"', '""')
+
+    defines_header = f"""; ==============================================================================
+; VaporBurn - Auto-generated Inno Setup Compilation Script
+; Target: {esc(config.get("GameName", "Game"))}
+; ==============================================================================
+
+#define GameName "{esc(config.get('GameName', 'Game'))}"
+#define AppVersion "{esc(config.get('AppVersion', '1.0'))}"
+#define AppPublisher "{esc(config.get('AppPublisher', 'VaporFetch / VaporBurn'))}"
+#define AppExe "{esc(config.get('AppExe', 'Game.exe'))}"
+#define AppExeDir "{esc(config.get('AppExeDir', ''))}"
+#define AppId "{esc(config.get('AppId', '480'))}"
+#define SourceDir "{esc(config.get('SourceDir', 'staging'))}"
+#define OutputDir "{esc(config.get('OutputDir', 'output'))}"
+#define OutputBaseName "{esc(config.get('OutputBaseName', 'setup'))}"
+#define ChunkSize "{esc(config.get('ChunkSize', '4294967295'))}"
+#define HasDirectX {1 if config.get('HasDirectX') else 0}
+#define DirectXExe "{esc(config.get('DirectXExe', ''))}"
+#define HasVCRedist64 {1 if config.get('HasVCRedist64') else 0}
+#define VCRedist64Exe "{esc(config.get('VCRedist64Exe', ''))}"
+#define HasVCRedist86 {1 if config.get('HasVCRedist86') else 0}
+#define VCRedist86Exe "{esc(config.get('VCRedist86Exe', ''))}"
+#define HasSaves {1 if config.get('HasSaves') else 0}
+#define SavesRelDir "{esc(config.get('SavesRelDir', ''))}"
+
+"""
+    full_script = defines_header + template_content
+    target_iss_path.parent.mkdir(parents=True, exist_ok=True)
+    target_iss_path.write_text(full_script, encoding="utf-8")
+    return full_script
+
+
 async def run_packaging_pipeline(
     job_id: str,
     game_path: Path,
@@ -59,13 +126,18 @@ async def run_packaging_pipeline(
         app_id = params.get("app_id") or find_steam_appid(game_path) or "480"
         
         primary_exe_override = params.get("main_exe")
-        if primary_exe_override and (game_path / primary_exe_override).exists():
-            custom_exe = game_path / primary_exe_override
-            primary_exe = {
-                "rel_path": str(custom_exe.relative_to(game_path)).replace("/", "\\"),
-                "name": custom_exe.name,
-                "rel_dir": str(custom_exe.parent.relative_to(game_path)).replace("/", "\\") if str(custom_exe.parent.relative_to(game_path)) != "." else ""
-            }
+        if primary_exe_override:
+            norm_exe = primary_exe_override.replace("\\", "/").strip("/")
+            custom_exe = game_path / norm_exe
+            if custom_exe.exists():
+                rel_dir = str(custom_exe.parent.relative_to(game_path)).replace("/", "\\")
+                primary_exe = {
+                    "rel_path": str(custom_exe.relative_to(game_path)).replace("/", "\\"),
+                    "name": custom_exe.name,
+                    "rel_dir": "" if rel_dir == "." else rel_dir
+                }
+            else:
+                primary_exe = discover_primary_executable(game_path, folder_name)
         else:
             primary_exe = discover_primary_executable(game_path, folder_name)
 
@@ -120,54 +192,57 @@ async def run_packaging_pipeline(
         # Stage 3: Inno Setup Compilation via Wine
         # -------------------------------------------------------------
         await progress_callback(35, "Compiling Inno Setup Windows installer (LZMA2 Ultra compression)...")
-        await log_callback("[InnoSetup] Invoking ISCC compiler via Wine...")
+        await log_callback("[InnoSetup] Generating tailored installer configuration script...")
 
-        # Convert linux staging and build paths to Windows paths for Inno Setup
-        win_staging = str(staging_dir)
-        win_build_out = str(build_out_dir)
-
-        # Attempt winepath if available
-        try:
-            wp_src = subprocess.check_output(["winepath", "-w", str(staging_dir)], text=True).strip()
-            wp_out = subprocess.check_output(["winepath", "-w", str(build_out_dir)], text=True).strip()
-            win_staging = wp_src
-            win_build_out = wp_out
-        except Exception:
-            pass
+        # Translate POSIX staging and build output to Wine Windows paths
+        win_staging = to_wine_path(staging_dir)
+        win_build_out = to_wine_path(build_out_dir)
 
         chunk_size = str(params.get("chunk_size", 4294967295))
+        iss_file = job_workspace / "installer.iss"
+        generate_iss_script(
+            target_iss_path=iss_file,
+            template_path=TEMPLATE_ISS,
+            config={
+                "GameName": game_title,
+                "AppVersion": "1.0",
+                "AppPublisher": "VaporFetch / VaporBurn",
+                "AppExe": primary_exe["rel_path"],
+                "AppExeDir": primary_exe["rel_dir"],
+                "AppId": app_id,
+                "SourceDir": win_staging,
+                "OutputDir": win_build_out,
+                "OutputBaseName": "setup",
+                "ChunkSize": chunk_size,
+                "HasDirectX": has_dx == "1",
+                "DirectXExe": dx_exe,
+                "HasVCRedist64": has_vc64 == "1",
+                "VCRedist64Exe": vc64_exe,
+                "HasVCRedist86": has_vc86 == "1",
+                "VCRedist86Exe": vc86_exe,
+                "HasSaves": has_saves == "1",
+                "SavesRelDir": saves_rel,
+            }
+        )
+
+        win_iss = to_wine_path(iss_file)
         iscc_cmd = [
             "wine",
             "/opt/innosetup/app/ISCC.exe",
-            f"/DGameName={game_title}",
-            f"/DAppExe={primary_exe['rel_path']}",
-            f"/DAppExeDir={primary_exe['rel_dir']}",
-            f"/DAppId={app_id}",
-            f"/DSourceDir={win_staging}",
-            f"/DOutputDir={win_build_out}",
-            "/DOutputBaseName=setup",
-            f"/DChunkSize={chunk_size}",
-            f"/DHasDirectX={has_dx}",
-            f"/DDirectXExe={dx_exe}",
-            f"/DHasVCRedist64={has_vc64}",
-            f"/DVCRedist64Exe={vc64_exe}",
-            f"/DHasVCRedist86={has_vc86}",
-            f"/DVCRedist86Exe={vc86_exe}",
-            f"/DHasSaves={has_saves}",
-            f"/DSavesRelDir={saves_rel}",
-            str(TEMPLATE_ISS)
+            win_iss
         ]
 
-        await log_callback(f"[InnoSetup] Command: {' '.join(iscc_cmd[:5])} ...")
+        await log_callback(f"[InnoSetup] Invoking ISCC: {' '.join(iscc_cmd)}")
 
-        # Execute wine process asynchronously and stream terminal output
+        wine_prefix = os.environ.get("WINEPREFIX", "/tmp/wine")
         proc = await asyncio.create_subprocess_exec(
             *iscc_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ, "WINEDEBUG": "-all", "WINEPREFIX": "/tmp/wine"}
+            env={**os.environ, "WINEDEBUG": "-all", "WINEPREFIX": wine_prefix}
         )
 
+        iscc_output_lines = []
         while True:
             if is_cancelled():
                 try:
@@ -181,6 +256,7 @@ async def run_packaging_pipeline(
                 break
             text = line.decode("utf-8", errors="ignore").rstrip()
             if text:
+                iscc_output_lines.append(text)
                 await log_callback(f"[ISCC] {text}")
                 # Parse progress markers from ISCC output
                 if "Compressing" in text:
@@ -188,7 +264,14 @@ async def run_packaging_pipeline(
 
         await proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError(f"Inno Setup compilation failed with exit code {proc.returncode}")
+            error_lines = [
+                l for l in iscc_output_lines 
+                if any(k in l.lower() for k in ["error", "fatal", "failed", "line "])
+            ]
+            if not error_lines:
+                error_lines = iscc_output_lines[-10:]
+            error_summary = "\n".join(error_lines[-5:]) if error_lines else f"Exit code {proc.returncode}"
+            raise RuntimeError(f"Inno Setup compilation failed with exit code {proc.returncode}:\n{error_summary}")
 
         setup_exe = build_out_dir / "setup.exe"
         if not setup_exe.exists():

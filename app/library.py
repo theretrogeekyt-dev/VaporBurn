@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Optional
 from app.config import INPUT_DIR, DATA_DIR
 from scripts.discover_exe import (
     discover_primary_executable,
+    discover_all_executables,
     extract_steam_manifest_info,
     is_valid_game_dir,
     find_goldberg_locations,
@@ -134,7 +135,8 @@ def inspect_game_folder(game_dir: Path) -> Dict[str, Any]:
     goldberg_info = find_goldberg_locations(game_dir)
     save_info = find_save_data(game_dir)
     redists = find_redistributables(game_dir)
-    primary_exe = discover_primary_executable(game_dir, folder_name)
+    candidates = discover_all_executables(game_dir, folder_name)
+    primary_exe = candidates[0] if candidates else None
     size_bytes = get_dir_size(game_dir)
 
     return {
@@ -150,6 +152,7 @@ def inspect_game_folder(game_dir: Path) -> Dict[str, Any]:
         "save_count": save_info.get("file_count", 0),
         "redist_count": len(redists),
         "primary_exe": primary_exe.get("rel_path") if primary_exe else None,
+        "candidates": candidates,
         "path": str(game_dir),
     }
 

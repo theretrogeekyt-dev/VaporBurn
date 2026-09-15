@@ -20,6 +20,7 @@ BLACKLIST_PATTERNS = [
     r"^unitycrashhandler.*\.exe$",
     r"^crashpad_handler.*\.exe$",
     r"^werfault.*\.exe$",
+    r"^unrealcefsubprocess.*\.exe$",
     r"^dxsetup\.exe$",
     r"^vcredist.*\.exe$",
     r"^vc_redist.*\.exe$",
@@ -39,6 +40,11 @@ BLACKLIST_PATTERNS = [
     r"^benchmark.*\.exe$",
     r"^7z.*\.exe$",
     r"^quickvfv\.exe$",
+    r"^easyanticheat.*\.exe$",
+    r"^eac_server.*\.exe$",
+    r"^battleye.*\.exe$",
+    r"^bootstrapper?.*\.exe$",
+    r"^webhelper.*\.exe$",
 ]
 
 COMPILED_BLACKLIST = [re.compile(pat, re.IGNORECASE) for pat in BLACKLIST_PATTERNS]
@@ -290,86 +296,209 @@ def find_redistributables(game_root: Path) -> List[Dict[str, str]]:
     return redists
 
 
-def discover_primary_executable(game_root: Path, game_folder_name: str) -> Optional[Dict[str, Any]]:
-    """Heuristic scoring to discover the primary game executable."""
+def inspect_pe_file(exe_path: Path) -> Dict[str, Any]:
+    """Inspects a Windows PE executable header safely without third-party dependencies."""
+    res = {
+        "is_pe": False,
+        "is_64bit": False,
+        "is_gui": True,
+        "is_cui": False,
+        "has_3d_api": False,
+    }
+    try:
+        with open(exe_path, "rb") as f:
+            header = f.read(1024)
+            if len(header) < 64 or header[:2] != b"MZ":
+                return res
+
+            pe_offset = int.from_bytes(header[0x3C:0x40], byteorder="little")
+            if pe_offset + 24 > len(header) or header[pe_offset:pe_offset+4] != b"PE\0\0":
+                return res
+
+            res["is_pe"] = True
+            machine = int.from_bytes(header[pe_offset+4:pe_offset+6], byteorder="little")
+            res["is_64bit"] = (machine == 0x8664)  # IMAGE_FILE_MACHINE_AMD64
+
+            opt_header_offset = pe_offset + 24
+            if opt_header_offset + 70 <= len(header):
+                subsystem = int.from_bytes(header[opt_header_offset+68:opt_header_offset+70], byteorder="little")
+                res["is_gui"] = (subsystem == 2)  # IMAGE_SUBSYSTEM_WINDOWS_GUI
+                res["is_cui"] = (subsystem == 3)  # IMAGE_SUBSYSTEM_WINDOWS_CUI (Console)
+
+            # Check for DirectX, Vulkan, or gaming imports in the first 128KB
+            f.seek(0)
+            sample = f.read(131072).lower()
+            res["has_3d_api"] = any(lib in sample for lib in [b"d3d11", b"d3d12", b"dxgi", b"vulkan", b"xinput", b"unityplayer"])
+    except Exception:
+        pass
+    return res
+
+
+def discover_all_executables(game_root: Path, game_folder_name: str) -> List[Dict[str, Any]]:
+    """
+    Ranks all executables in the game folder using PE header analysis,
+    engine structure fingerprinting (Unreal, Unity, Godot, etc.),
+    Steam API co-location, and launcher penalties.
+    Returns a sorted list of candidates with tags and metadata.
+    """
     all_exes = [f for f in game_root.rglob("*.exe") if f.is_file()]
     if not all_exes:
-        return None
+        return []
 
-    scores = {}
+    # First check max size across binaries to detect launcher vs main game size difference
+    max_size_mb = max((f.stat().st_size for f in all_exes), default=0) / (1024 * 1024)
+
     normalized_game_name = re.sub(r"[^a-zA-Z0-9]", "", game_folder_name).lower()
+    candidates = []
 
     for exe in all_exes:
         if is_blacklisted(exe.name):
             continue
 
         score = 0
+        tags = []
         exe_lower = exe.name.lower()
-        parent_lower = str(exe.parent.relative_to(game_root)).lower()
-        size_mb = exe.stat().st_size / (1024 * 1024)
+        exe_stem = exe.stem.lower()
+        parent_dir = exe.parent
+        parent_lower = str(parent_dir.relative_to(game_root)).lower()
+        size_mb = round(exe.stat().st_size / (1024 * 1024), 2)
 
-        # 1. Unreal Engine Shipping Binary (+150)
+        # 1. PE Header Analysis
+        pe_info = inspect_pe_file(exe)
+        if pe_info["is_pe"]:
+            if pe_info["is_64bit"]:
+                score += 35
+                tags.append("x64")
+            else:
+                tags.append("x86")
+
+            if pe_info["is_gui"]:
+                score += 40
+            elif pe_info["is_cui"]:
+                # Console binary: very likely a server, updater, or command-line tool
+                score -= 180
+                tags.append("Console Utility")
+
+            if pe_info["has_3d_api"]:
+                score += 70
+                tags.append("3D/DirectX")
+
+        # 2. Engine Detection & Fingerprinting
+        # Unreal Engine 4 / 5
         if "-win64-shipping.exe" in exe_lower or "-shipping.exe" in exe_lower:
-            score += 150
+            score += 220
+            tags.append("Unreal Shipping")
         elif "-win32-shipping.exe" in exe_lower:
-            score += 130
+            score += 170
+            tags.append("Unreal Shipping (x86)")
         elif "-win64.exe" in exe_lower:
-            score += 110
+            score += 130
+            tags.append("Unreal Bin64")
 
-        # 2. Co-location with steam_api.dll / steam_api64.dll (+90)
-        if (exe.parent / "steam_api64.dll").exists() or (exe.parent / "steam_api.dll").exists():
+        # Unity Engine (check for <Game>_Data folder or UnityPlayer.dll)
+        data_dir_name = f"{exe.stem}_Data"
+        if (parent_dir / data_dir_name).exists() and (parent_dir / data_dir_name).is_dir():
+            score += 250
+            tags.append("Unity Main Binary")
+        elif (parent_dir / "UnityPlayer.dll").exists():
             score += 90
+            tags.append("Unity Engine")
 
-        # 3. Path structure heuristic (+50 for Binaries/Win64, bin/x64)
-        if "binaries/win64" in parent_lower or "binaries\\win64" in parent_lower:
+        # Godot Engine (check for <Game>.pck)
+        if (parent_dir / f"{exe.stem}.pck").exists():
+            score += 200
+            tags.append("Godot Main Binary")
+
+        # 3. Co-location with Steam API & Goldberg
+        has_steam_dll = (parent_dir / "steam_api64.dll").exists() or (parent_dir / "steam_api.dll").exists()
+        if has_steam_dll:
+            score += 120
+            tags.append("Steam API")
+
+        if (parent_dir / "steam_appid.txt").exists() or (parent_dir / "steam_settings").exists():
             score += 60
+
+        # 4. Folder Path Heuristics
+        if "binaries/win64" in parent_lower or "binaries\\win64" in parent_lower:
+            score += 80
         elif "bin/x64" in parent_lower or "bin\\x64" in parent_lower or "bin64" in parent_lower:
-            score += 45
-        elif parent_lower == ".":
+            score += 60
+        elif "bin" in parent_lower:
             score += 30
+        elif parent_lower == ".":
+            # Root directory
+            score += 25
 
-        # 4. Name match with game folder name (+40)
-        clean_exe_stem = re.sub(r"[^a-zA-Z0-9]", "", exe.stem).lower()
+        # 5. Name Similarity with Game Title
+        clean_exe_stem = re.sub(r"[^a-zA-Z0-9]", "", exe_stem).lower()
         if normalized_game_name and (clean_exe_stem in normalized_game_name or normalized_game_name in clean_exe_stem):
-            score += 50
+            score += 70
+            tags.append("Title Match")
 
-        # 5. File size weight (actual game executables are usually > 10MB)
-        # Launcher stubs are typically 100KB - 3MB
-        if size_mb > 10:
-            score += min(int(size_mb), 40)
-        elif size_mb < 2:
-            score -= 10
+        # 6. File Size Weights & Small Stub Detection
+        if size_mb > 15:
+            score += min(int(size_mb), 80)
+        elif size_mb < 3 and max_size_mb > 15:
+            # Launcher stub penalty when large shipping binary exists
+            score -= 80
+            tags.append("Launcher Stub")
 
-        # 6. Generic launcher penalty if other executables exist
-        if exe_lower in ["launcher.exe", "gamelauncher.exe", "start.exe"]:
-            score -= 20
+        # 7. Launcher / Utility / AntiCheat Penalties
+        if any(pat in exe_lower for pat in ["crash", "bugreport", "feedback", "report", "telemetry", "easyanticheat", "battleye", "unins000"]):
+            score -= 250
+            tags.append("Diagnostic/Stub")
 
-        scores[exe] = (score, size_mb)
+        if any(pat in exe_lower for pat in ["launcher", "prelauncher", "play"]):
+            score -= 100
+            if "Launcher Stub" not in tags and "Diagnostic/Stub" not in tags:
+                tags.append("Launcher")
 
-    if not scores:
-        # If all were blacklisted, pick the largest non-crashhandler exe
-        fallback = [f for f in all_exes if "crash" not in f.name.lower() and "unins" not in f.name.lower()]
-        if fallback:
-            best_exe = max(fallback, key=lambda f: f.stat().st_size)
-        else:
-            best_exe = all_exes[0]
-        score, size_mb = 0, best_exe.stat().st_size / (1024 * 1024)
+        if any(pat in exe_lower for pat in ["config", "settings", "autorun", "autoupdater"]):
+            score -= 200
+
+        rel_exe = str(exe.relative_to(game_root)).replace("/", "\\")
+        rel_dir = str(parent_dir.relative_to(game_root)).replace("/", "\\")
+        if rel_dir == ".":
+            rel_dir = ""
+
+        candidate_tag = " | ".join(tags) if tags else "Windows Executable"
+
+        candidates.append({
+            "rel_path": rel_exe,
+            "name": exe.name,
+            "rel_dir": rel_dir,
+            "size_mb": size_mb,
+            "score": score,
+            "tag": candidate_tag,
+            "is_recommended": False,
+        })
+
+    if not candidates:
+        # Fallback to largest executable
+        best = max(all_exes, key=lambda f: f.stat().st_size)
+        rel_exe = str(best.relative_to(game_root)).replace("/", "\\")
+        rel_dir = str(best.parent.relative_to(game_root)).replace("/", "\\")
+        candidates.append({
+            "rel_path": rel_exe,
+            "name": best.name,
+            "rel_dir": "" if rel_dir == "." else rel_dir,
+            "size_mb": round(best.stat().st_size / (1024 * 1024), 2),
+            "score": 0,
+            "tag": "Fallback Binary",
+            "is_recommended": True,
+        })
     else:
-        best_exe = max(scores.keys(), key=lambda k: scores[k][0])
-        score, size_mb = scores[best_exe]
+        # Sort candidates descending by score
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        candidates[0]["is_recommended"] = True
 
-    rel_exe = str(best_exe.relative_to(game_root)).replace("/", "\\")
-    rel_dir = str(best_exe.parent.relative_to(game_root)).replace("/", "\\")
-    if rel_dir == ".":
-        rel_dir = ""
+    return candidates
 
-    return {
-        "rel_path": rel_exe,
-        "name": best_exe.name,
-        "rel_dir": rel_dir,
-        "size_mb": round(size_mb, 2),
-        "score": score,
-    }
+
+def discover_primary_executable(game_root: Path, game_folder_name: str) -> Optional[Dict[str, Any]]:
+    """Returns the single highest-scoring primary executable for the game."""
+    all_cands = discover_all_executables(game_root, game_folder_name)
+    return all_cands[0] if all_cands else None
 
 
 def main():
@@ -396,9 +525,10 @@ def main():
     print(f"[Discovery] Detected Game Title: {game_title}")
     print(f"[Discovery] Detected Steam App ID: {app_id or 'None (Unknown)'}")
 
-    # Primary executable
+    # Executable discovery
+    candidates = discover_all_executables(game_root, folder_name)
     if args.main_exe:
-        custom_exe = (game_root / args.main_exe).resolve()
+        custom_exe = (game_root / args.main_exe.replace("\\", "/")).resolve()
         if custom_exe.exists():
             rel_exe = str(custom_exe.relative_to(game_root)).replace("/", "\\")
             rel_dir = str(custom_exe.parent.relative_to(game_root)).replace("/", "\\")
@@ -408,15 +538,17 @@ def main():
                 "rel_dir": "" if rel_dir == "." else rel_dir,
                 "size_mb": round(custom_exe.stat().st_size / (1024 * 1024), 2),
                 "score": 9999,
+                "tag": "User Specified Override",
+                "is_recommended": True,
             }
         else:
             print(f"Warning: Specified --main-exe '{args.main_exe}' not found! Falling back to auto-discovery.", file=sys.stderr)
-            primary_exe = discover_primary_executable(game_root, folder_name)
+            primary_exe = candidates[0] if candidates else None
     else:
-        primary_exe = discover_primary_executable(game_root, folder_name)
+        primary_exe = candidates[0] if candidates else None
 
     if primary_exe:
-        print(f"[Discovery] Primary Executable: {primary_exe['rel_path']} ({primary_exe['size_mb']} MB, score={primary_exe['score']})")
+        print(f"[Discovery] Primary Executable: {primary_exe['rel_path']} ({primary_exe['size_mb']} MB, score={primary_exe.get('score', 0)})")
     else:
         print("[Discovery] Warning: No suitable executable found in game directory!")
 
@@ -440,6 +572,7 @@ def main():
         "folder_name": folder_name,
         "app_id": app_id,
         "primary_exe": primary_exe,
+        "candidates": candidates,
         "goldberg": goldberg_info,
         "saves": save_info,
         "redistributables": redists,

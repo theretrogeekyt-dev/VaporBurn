@@ -129,6 +129,36 @@ class TestAppModules(unittest.TestCase):
         self.assertEqual(DEFAULT_SETTINGS["default_player_name"], "VaporPlayer")
         self.assertEqual(DEFAULT_SETTINGS["default_language"], "english")
 
+    def test_candidates_in_game_inspection(self):
+        """Verify that inspect_game_folder provides full ranked candidates list."""
+        info = inspect_game_folder(self.game_dir)
+        self.assertIn("candidates", info)
+        self.assertGreater(len(info["candidates"]), 0)
+        top = info["candidates"][0]
+        self.assertEqual(top["rel_path"], "hl2.exe")
+        self.assertTrue(top["is_recommended"])
+        self.assertEqual(info["primary_exe"], "hl2.exe")
+
+    def test_multi_exe_heuristic_ranking(self):
+        """Verify that a shipping binary beats a small root launcher and config tool."""
+        multi_dir = self.root / "UnrealGame"
+        multi_dir.mkdir(parents=True, exist_ok=True)
+        (multi_dir / "Launcher.exe").write_bytes(b"LAUNCHER" * 500) # small stub
+        (multi_dir / "Config.exe").write_bytes(b"CONFIG" * 500)
+        
+        bin_dir = multi_dir / "Binaries" / "Win64"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shipping_exe = bin_dir / "UnrealGame-Win64-Shipping.exe"
+        shipping_exe.write_bytes(b"SHIPPING_EXE" * 500000) # ~6MB
+
+        info = inspect_game_folder(multi_dir)
+        self.assertIsNotNone(info["candidates"])
+        # Unreal shipping exe must be ranked #1
+        self.assertEqual(info["candidates"][0]["name"], "UnrealGame-Win64-Shipping.exe")
+        self.assertTrue(info["candidates"][0]["is_recommended"])
+        self.assertIn("Unreal Shipping", info["candidates"][0]["tag"])
+        self.assertEqual(info["primary_exe"], "Binaries\\Win64\\UnrealGame-Win64-Shipping.exe")
+
 
 if __name__ == "__main__":
     unittest.main()

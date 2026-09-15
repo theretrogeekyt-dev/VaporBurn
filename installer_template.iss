@@ -74,7 +74,7 @@
 
 [Setup]
 ; Basic Application Info
-AppId={{#GameName}-{#AppId}-VAPORBURN}
+AppId={{#AppId}-VAPORBURN}
 AppName={#GameName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
@@ -111,19 +111,19 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "firewall"; Description: "Configure Windows Firewall rule (Recommended for LAN & P2P multiplayer)"; GroupDescription: "Network Integration:"
 
-#if HasDirectX == "1"
+#if (HasDirectX == "1") || (HasDirectX == 1)
 Name: "redist_dx"; Description: "Install DirectX End-User Runtimes (Silent)"; GroupDescription: "Prerequisites & Dependencies:"
 #endif
 
-#if HasVCRedist64 == "1"
+#if (HasVCRedist64 == "1") || (HasVCRedist64 == 1)
 Name: "redist_vc64"; Description: "Install Visual C++ 64-bit Redistributable"; GroupDescription: "Prerequisites & Dependencies:"
 #endif
 
-#if HasVCRedist86 == "1"
+#if (HasVCRedist86 == "1") || (HasVCRedist86 == 1)
 Name: "redist_vc86"; Description: "Install Visual C++ 32-bit Redistributable"; GroupDescription: "Prerequisites & Dependencies:"
 #endif
 
-#if HasSaves == "1"
+#if (HasSaves == "1") || (HasSaves == 1)
 Name: "restoresaves"; Description: "Restore bundled Goldberg save data to %APPDATA%"; GroupDescription: "Save Data Management:"
 #endif
 
@@ -142,21 +142,21 @@ Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""{#GameName}
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""{#GameName}"" dir=out action=allow program=""{app}\{#AppExe}"" enable=yes"; Flags: runhidden; Tasks: firewall
 
 ; Redistributables execution
-#if HasDirectX == "1"
+#if (HasDirectX == "1") || (HasDirectX == 1)
 Filename: "{app}\{#DirectXExe}"; Parameters: "/silent"; StatusMsg: "Installing DirectX Runtimes..."; Flags: runhidden; Tasks: redist_dx
 #endif
 
-#if HasVCRedist64 == "1"
+#if (HasVCRedist64 == "1") || (HasVCRedist64 == 1)
 Filename: "{app}\{#VCRedist64Exe}"; Parameters: "/install /passive /norestart"; StatusMsg: "Installing Visual C++ (x64)..."; Flags: runhidden; Tasks: redist_vc64
 #endif
 
-#if HasVCRedist86 == "1"
+#if (HasVCRedist86 == "1") || (HasVCRedist86 == 1)
 Filename: "{app}\{#VCRedist86Exe}"; Parameters: "/install /passive /norestart"; StatusMsg: "Installing Visual C++ (x86)..."; Flags: runhidden; Tasks: redist_vc86
 #endif
 
 ; Post-install launch & integrity check options
 Filename: "{app}\verify_integrity.bat"; Description: "Verify installed file integrity (SHA-256 Checksums)"; Flags: postinstall skipifsilent nowait unchecked
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(GameName, '&', '&&')}}"; Flags: postinstall nowait skipifsilent unchecked
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#GameName}}"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallRun]
 ; Remove Firewall Rule on Uninstall
@@ -456,7 +456,7 @@ begin
     ConfigureGoldbergInFolder(ExpandConstant('{app}'), PlayerName, Language, SteamId, OfflineMode);
 
     // 2. Restore bundled save files if requested
-    #if HasSaves == "1"
+    #if (HasSaves == "1") || (HasSaves == 1)
     if WizardIsTaskSelected('restoresaves') then
     begin
       SaveSrc := ExpandConstant('{app}\{#SavesRelDir}');
