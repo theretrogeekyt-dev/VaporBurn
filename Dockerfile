@@ -33,11 +33,10 @@ RUN dpkg --add-architecture i386 \
         rsync \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Inno Setup 6.3.3 via innoextract (using official GitHub release with mirror fallback)
-ARG INNOSETUP_URL="https://github.com/jrsoftware/issrc/releases/download/is-6_3_3/innosetup-6.3.3.exe"
+# Install Inno Setup 6.2.2 via innoextract (fully supported by innoextract 1.9)
+ARG INNOSETUP_URL="https://github.com/jrsoftware/issrc/releases/download/is-6_2_2/innosetup-6.2.2.exe"
 RUN mkdir -p /opt/innosetup \
-    && (curl -fsSL "${INNOSETUP_URL}" -o /tmp/innosetup.exe \
-        || curl -fsSL "https://github.com/jrsoftware/issrc/releases/download/is-6_2_2/innosetup-6.2.2.exe" -o /tmp/innosetup.exe) \
+    && curl -fsSL "${INNOSETUP_URL}" -o /tmp/innosetup.exe \
     && innoextract -d /opt/innosetup /tmp/innosetup.exe \
     && rm -f /tmp/innosetup.exe
 
