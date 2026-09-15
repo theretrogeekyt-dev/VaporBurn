@@ -107,3 +107,4 @@ def scan_input_library() -> List[Dict[str, Any]]:
         games.append(inspect_game_folder(sdir))
 
     return games
+
