@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaporBurn — ISO Windows Installer Packaging Engine</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💿</text></svg>">
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="top-nav">
+    <div class="nav-left">
+      <div class="logo" onclick="switchTab('library')">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 2a10 10 0 0 1 10 10"/>
+          <path d="M12 22a10 10 0 0 1-10-10"/>
+        </svg>
+        <span class="logo-title">VaporBurn</span>
+        <span class="badge badge-iso">ISO BUILDER</span>
+      </div>
+      
+      <nav class="nav-tabs">
+        <button id="tabLibraryBtn" class="tab-btn active" onclick="switchTab('library')">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          Game Library
+          <span id="libraryBadge" class="tab-badge" style="display:none;">0</span>
+        </button>
+        <button id="tabQueueBtn" class="tab-btn" onclick="switchTab('queue')">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          Packaging Queue
+          <span id="queueBadge" class="tab-badge" style="display:none;">0</span>
+        </button>
+        <button id="tabIsosBtn" class="tab-btn" onclick="switchTab('isos')">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><path d="M12 15h.01"/></svg>
+          Completed ISOs
+          <span id="isosBadge" class="tab-badge" style="display:none;">0</span>
+        </button>
+      </nav>
+    </div>
+
+    <div class="nav-right">
+      <!-- Storage Indicator -->
+      <div class="storage-widget" id="storageWidget" title="Mounted /output ISO storage">
+        <div class="storage-info">
+          <span class="storage-label">ISO Storage</span>
+          <span class="storage-val" id="storageText">-- / -- GB</span>
+        </div>
+        <div class="storage-bar-bg">
+          <div class="storage-bar-fill" id="storageFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Refresh Button -->
+      <button class="icon-btn" onclick="refreshCurrentView()" title="Refresh Data">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+      </button>
+
+      <!-- Settings Button -->
+      <button class="icon-btn" onclick="openSettingsModal()" title="Configuration & Defaults">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-content">
+
+    <!-- View 1: Game Library View -->
+    <section id="libraryView" class="view-panel active">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <div class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="searchInput" placeholder="Search backups by title or AppID..." oninput="handleSearch()">
+          </div>
+          <div class="sort-box">
+            <label for="sortSelect">Sort:</label>
+            <select id="sortSelect" onchange="handleSort()">
+              <option value="title_asc">Title (A &rarr; Z)</option>
+              <option value="title_desc">Title (Z &rarr; A)</option>
+              <option value="size_desc">Largest Size</option>
+              <option value="appid_asc">Steam AppID</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toolbar-right">
+          <span id="libCountText" style="font-size: 13px; color: var(--text-dim);">0 backups detected</span>
+        </div>
+      </div>
+
+      <div id="gamesGrid" class="games-grid">
+        <!-- Dynamically rendered game cards -->
+      </div>
+
+      <div id="emptyLibrary" class="empty-state" style="display: none;">
+        <div class="empty-icon">🎮</div>
+        <h3>No Game Backups Found</h3>
+        <p>Mount your VaporFetch game folder to <code>/input</code> to begin packaging installers.</p>
+      </div>
+    </section>
+
+    <!-- View 2: Packaging Queue View -->
+    <section id="queueView" class="view-panel">
+      <!-- Active Job Card -->
+      <div id="activeJobSection" class="active-job-card" style="display: none;">
+        <div class="job-header">
+          <div class="job-title-area">
+            <h2>
+              <span id="activeJobTitle">Packaging Game...</span>
+              <span id="activeJobBadge" class="badge badge-iso">BUILDING</span>
+            </h2>
+            <p id="activeJobMeta" style="font-size: 13px; color: var(--text-dim); margin-top: 4px;">Job ID: -- | Format: Single ISO</p>
+          </div>
+          <button class="btn btn-danger btn-sm" onclick="cancelActiveJob()">Abort Packaging</button>
+        </div>
+
+        <div class="progress-container">
+          <div class="progress-labels">
+            <span id="activeJobStage">Initializing pipeline...</span>
+            <span id="activeJobPercent" style="font-weight: 700; color: var(--accent-orange);">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="activeJobBar" class="progress-bar-fill" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Real-time Wine & Compiler Terminal Output -->
+        <div class="terminal-viewer">
+          <div class="terminal-header">
+            <span>Live Compiler & Pipeline Terminal Stream</span>
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <label style="cursor: pointer; font-size: 11px;">
+                <input type="checkbox" id="autoScrollCheck" checked> Auto-scroll
+              </label>
+              <button class="btn btn-secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="clearLogs()">Clear</button>
+            </div>
+          </div>
+          <div id="terminalLogs" class="terminal-logs">
+            <!-- Streamed output from SSE -->
+          </div>
+        </div>
+      </div>
+
+      <!-- No Active Job Notice -->
+      <div id="noActiveJob" class="empty-state" style="display: none;">
+        <div class="empty-icon">⏳</div>
+        <h3>No Packaging Job Running</h3>
+        <p>Select a game from your <strong>Game Library</strong> and click <strong>"Package to ISO"</strong> to start.</p>
+      </div>
+
+      <!-- Job History Table -->
+      <h3 style="margin: 28px 0 16px 0; font-size: 17px;">Recent Packaging Jobs</h3>
+      <div class="iso-table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Game Title</th>
+              <th>Format</th>
+              <th>Status</th>
+              <th>Result Artifacts</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="jobsHistoryBody">
+            <!-- Rendered history rows -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- View 3: Completed ISOs View -->
+    <section id="isosView" class="view-panel">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <h3 style="font-size: 18px;">Completed Disc Images in <code>/output</code></h3>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-secondary btn-sm" onclick="loadIsos()">Rescan Output Directory</button>
+        </div>
+      </div>
+
+      <div class="iso-table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ISO Image Filename</th>
+              <th>File Size</th>
+              <th>SHA-256 Checksum</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="isosTableBody">
+            <!-- Rendered ISO rows -->
+          </tbody>
+        </table>
+      </div>
+
+      <div id="emptyIsos" class="empty-state" style="display: none;">
+        <div class="empty-icon">💿</div>
+        <h3>No Completed ISOs Yet</h3>
+        <p>Packaged Windows installers will appear here with direct download links and SHA-256 checksums.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal: Package to ISO Configuration -->
+  <div id="packageModal" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">🔥 Package Game to Windows ISO</h3>
+        <button class="modal-close" onclick="closePackageModal()">&times;</button>
+      </div>
+      <form id="packageForm" onsubmit="submitPackageJob(event)">
+        <div class="modal-body">
+          <input type="hidden" id="modalFolderName">
+
+          <div class="form-group">
+            <label for="modalGameTitle">Game Title</label>
+            <input type="text" id="modalGameTitle" required>
+          </div>
+
+          <div style="display: flex; gap: 14px;">
+            <div class="form-group" style="flex: 1;">
+              <label for="modalAppId">Steam App ID</label>
+              <input type="text" id="modalAppId" required>
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label for="modalDiscType">Disc Format Mode</label>
+              <select id="modalDiscType" onchange="handleDiscTypeChange()">
+                <option value="single">Single ISO (Default)</option>
+                <option value="dvd5">DVD-5 (4.37 GB)</option>
+                <option value="dvd9">DVD-9 (7.95 GB)</option>
+                <option value="bd25">Blu-ray BD-25 (23.2 GB)</option>
+                <option value="custom">Custom Size (MB)</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="customSizeGroup" class="form-group" style="display: none;">
+            <label for="modalCustomSize">Disc Split Capacity (MB)</label>
+            <input type="number" id="modalCustomSize" placeholder="e.g. 4480">
+          </div>
+
+          <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 6px 0;">
+
+          <!-- Goldberg Emulator Settings -->
+          <div style="font-size: 13px; font-weight: 700; color: var(--accent-steam);">
+            🕹️ Goldberg Profile Settings (Installer Defaults)
+          </div>
+
+          <div style="display: flex; gap: 14px;">
+            <div class="form-group" style="flex: 1;">
+              <label for="modalPlayerName">Player Name</label>
+              <input type="text" id="modalPlayerName" value="VaporPlayer">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label for="modalLanguage">Language</label>
+              <input type="text" id="modalLanguage" value="english">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="modalSteamId">Steam ID64</label>
+            <input type="text" id="modalSteamId" value="76561197960287930">
+          </div>
+
+          <!-- Checkbox options -->
+          <label class="checkbox-row">
+            <input type="checkbox" id="modalLimitRam" checked>
+            <span>Limit installer RAM usage to 2GB (Decompression Safety)</span>
+          </label>
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="modalFirewall" checked>
+            <span>Add Windows Firewall rule for LAN / P2P play</span>
+          </label>
+
+          <label id="saveRow" class="checkbox-row" style="display: none;">
+            <input type="checkbox" id="modalRestoreSaves" checked>
+            <span>Include and restore bundled Goldberg save data</span>
+          </label>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closePackageModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">🔥 Start Packaging</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Global Settings -->
+  <div id="settingsModal" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">⚙️ VaporBurn Settings & Diagnostics</h3>
+        <button class="modal-close" onclick="closeSettingsModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Default Disc Media Format</label>
+          <select id="settingDefaultDisc">
+            <option value="single">Single ISO</option>
+            <option value="dvd5">DVD-5</option>
+            <option value="dvd9">DVD-9</option>
+            <option value="bd25">BD-25</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Default Player Name</label>
+          <input type="text" id="settingDefaultPlayer">
+        </div>
+        <div class="form-group">
+          <label>Default Language</label>
+          <input type="text" id="settingDefaultLang">
+        </div>
+
+        <div style="background: var(--bg-surface); padding: 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-dim);">
+          <div><strong>Container Paths:</strong></div>
+          <div>Input Share: <code>/input</code></div>
+          <div>Output Share: <code>/output</code></div>
+          <div>Data Share: <code>/app/data</code></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeSettingsModal()">Close</button>
+        <button type="button" class="btn btn-primary" onclick="saveGlobalSettings()">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

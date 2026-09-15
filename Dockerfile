@@ -8,8 +8,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PUID=1000 \
     PGID=1000 \
     UMASK=002 \
+    PORT=8081 \
     INPUT_DIR=/input \
     OUTPUT_DIR=/output \
+    DATA_DIR=/app/data \
     WORKSPACE_DIR=/workspace
 
 # Install system dependencies, Wine (32 & 64-bit), xorriso, 7-zip, Python, and utilities
@@ -28,6 +30,8 @@ RUN dpkg --add-architecture i386 \
         libwine \
         innoextract \
         python3 \
+        python3-pip \
+        python3-venv \
         gosu \
         dos2unix \
         rsync \
@@ -45,9 +49,14 @@ RUN WINEDEBUG=-all wineboot --init || true
 
 # Setup working directories
 WORKDIR /app
-RUN mkdir -p /input /output /workspace /app/scripts
+RUN mkdir -p /input /output /workspace /app/data /app/scripts /app/static
 
-# Copy pipeline scripts, Inno Setup template, and entrypoint
+# Install Python requirements
+COPY requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
+
+# Copy application backend, frontend static assets, pipeline scripts, template, and entrypoint
+COPY app/ /app/app/
 COPY scripts/ /app/scripts/
 COPY installer_template.iss /app/installer_template.iss
 COPY entrypoint.sh /app/entrypoint.sh
@@ -56,8 +65,10 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN dos2unix /app/entrypoint.sh /app/installer_template.iss /app/scripts/*.py \
     && chmod +x /app/entrypoint.sh /app/scripts/*.py
 
+# Web UI Port
+EXPOSE 8081
+
 # Volume Mountpoints
-VOLUME ["/input", "/output"]
+VOLUME ["/input", "/output", "/app/data"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-
